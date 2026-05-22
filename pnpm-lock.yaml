@@ -70,6 +70,37 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  apps/hirevoice:
+    dependencies:
+      "@sentry/junior":
+        specifier: workspace:*
+        version: file:packages/junior(@aws-sdk/credential-provider-web-identity@3.972.33)(@opentelemetry/api@1.9.1)(@sentry/node@10.50.0-alpha.0)
+      "@sentry/junior-agent-browser":
+        specifier: workspace:*
+        version: link:../../packages/junior-agent-browser
+      "@sentry/junior-github":
+        specifier: workspace:*
+        version: link:../../packages/junior-github
+      "@sentry/node":
+        specifier: 10.50.0-alpha.0
+        version: 10.50.0-alpha.0
+      hono:
+        specifier: ^4.12.6
+        version: 4.12.17
+    devDependencies:
+      "@types/node":
+        specifier: ^25.6.0
+        version: 25.6.0
+      jiti:
+        specifier: ^2.7.0
+        version: 2.7.0
+      nitro:
+        specifier: 3.0.260429-beta
+        version: 3.0.260429-beta(@vercel/blob@2.3.0)(@vercel/functions@3.5.0(@aws-sdk/credential-provider-web-identity@3.972.33))(chokidar@5.0.0)(jiti@2.7.0)(lru-cache@11.2.7)(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.4))
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/docs:
     dependencies:
       "@astrojs/check":
@@ -784,12 +815,6 @@ packages:
     resolution:
       {
         integrity: sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA==,
-      }
-
-  "@emnapi/runtime@1.9.1":
-    resolution:
-      {
-        integrity: sha512-VYi5+ZVLhpgK4hQ0TAjiQiZ6ol0oe4mBx7mVv7IflsiEp0OWoVsp/+f9Vc1hOhE0TtkORVrI1GvzyreqpgWtkA==,
       }
 
   "@emnapi/wasi-threads@1.2.1":
@@ -2011,15 +2036,6 @@ packages:
         integrity: sha512-pRLMNKTSGRoLq+KnEB/7OY5vijw1XmcheAAOiv6pj7W1FG32kAGqj1C/RK/cqxRGr1Fh+zBi8sDur8kj3EQv6A==,
       }
     engines: { node: ">=18" }
-
-  "@napi-rs/wasm-runtime@1.1.2":
-    resolution:
-      {
-        integrity: sha512-sNXv5oLJ7ob93xkZ1XnxisYhGYXfaG9f65/ZgYuAu3qt7b3NadcOEhLvx28hv31PgX8SZJRYrAIPQilQmFpLVw==,
-      }
-    peerDependencies:
-      "@emnapi/core": ^1.7.1
-      "@emnapi/runtime": ^1.7.1
 
   "@napi-rs/wasm-runtime@1.1.4":
     resolution:
@@ -4283,12 +4299,6 @@ packages:
     resolution:
       {
         integrity: sha512-7hWZS0NRpEsNV8vWJzg7FEz6V8MaLNeJOmwmghqUXTpzk16V1LLZhdo+4QvE/+zv4cVci0OviuJFnqhEfoV3+g==,
-      }
-
-  "@tybys/wasm-util@0.10.1":
-    resolution:
-      {
-        integrity: sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg==,
       }
 
   "@tybys/wasm-util@0.10.2":
@@ -11983,11 +11993,6 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  "@emnapi/runtime@1.9.1":
-    dependencies:
-      tslib: 2.8.1
-    optional: true
-
   "@emnapi/wasi-threads@1.2.1":
     dependencies:
       tslib: 2.8.1
@@ -12378,7 +12383,7 @@ snapshots:
 
   "@img/sharp-wasm32@0.34.5":
     dependencies:
-      "@emnapi/runtime": 1.9.1
+      "@emnapi/runtime": 1.10.0
     optional: true
 
   "@img/sharp-win32-arm64@0.34.5":
@@ -12592,13 +12597,6 @@ snapshots:
       is-node-process: 1.2.0
       outvariant: 1.4.3
       strict-event-emitter: 0.5.1
-
-  "@napi-rs/wasm-runtime@1.1.2(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)":
-    dependencies:
-      "@emnapi/core": 1.10.0
-      "@emnapi/runtime": 1.10.0
-      "@tybys/wasm-util": 0.10.1
-    optional: true
 
   "@napi-rs/wasm-runtime@1.1.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)":
     dependencies:
@@ -12945,7 +12943,7 @@ snapshots:
 
   "@oxc-transform/binding-wasm32-wasi@0.111.0(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)":
     dependencies:
-      "@napi-rs/wasm-runtime": 1.1.2(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
+      "@napi-rs/wasm-runtime": 1.1.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
     transitivePeerDependencies:
       - "@emnapi/core"
       - "@emnapi/runtime"
@@ -13198,7 +13196,7 @@ snapshots:
 
   "@rolldown/binding-wasm32-wasi@1.0.0-rc.1(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)":
     dependencies:
-      "@napi-rs/wasm-runtime": 1.1.2(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
+      "@napi-rs/wasm-runtime": 1.1.4(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)
     transitivePeerDependencies:
       - "@emnapi/core"
       - "@emnapi/runtime"
@@ -13968,11 +13966,6 @@ snapshots:
       minimatch: 3.1.5
       mkdirp: 1.0.4
       path-browserify: 1.0.1
-
-  "@tybys/wasm-util@0.10.1":
-    dependencies:
-      tslib: 2.8.1
-    optional: true
 
   "@tybys/wasm-util@0.10.2":
     dependencies:
