@@ -1,0 +1,18 @@
+name: hirevoice-pr-watch
+description: Manage PR-preview verification subscriptions for the Hirevoice bot. Provides /watch-preview, /list-watches, /unwatch-preview, and /verify-preview skills, backed by the host app's internal subscription endpoints.
+
+env-vars:
+  JUNIOR_INTERNAL_TOKEN:
+  JUNIOR_BASE_URL:
+
+# api-headers required to make `command-env` valid per plugin-spec.md.
+# The dummy domain is never hit in practice; the skills explicitly set the
+# Authorization header on curl calls using the token injected via command-env.
+domains:
+  - hirevoice-pr-watch.invalid
+api-headers:
+  X-Hirevoice-Internal: present
+
+command-env:
+  JUNIOR_INTERNAL_TOKEN: ${JUNIOR_INTERNAL_TOKEN}
+  JUNIOR_BASE_URL: ${JUNIOR_BASE_URL}

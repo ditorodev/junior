@@ -1,21 +1,50 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
+import { findActiveForPr } from "./db/subscriptions";
 
 interface IssueCommentEvent {
   action: string;
-  comment: { user: { login: string }; body: string; html_url: string };
-  issue: { number: number; pull_request?: unknown; html_url: string };
-  repository: { full_name: string; owner: { login: string }; name: string };
+  comment: { user: { login: string }; body: string };
+  issue: { number: number; pull_request?: unknown };
+  repository: { full_name: string };
   sender: { login: string };
 }
 
-/** Pull the first Vercel preview URL out of a Vercel-bot PR comment body. */
-function extractPreviewUrl(body: string): string | undefined {
-  const match = body.match(/https:\/\/[^\s)\]]+\.vercel\.app[^\s)\]]*/);
-  return match?.[0];
+interface DeploymentStatusEvent {
+  deployment: { sha: string; environment: string };
+  deployment_status: { state: string; environment_url?: string };
+  repository: { full_name: string };
+  pull_requests?: { number: number }[];
 }
 
-/** Constant-time HMAC-SHA256 check against `X-Hub-Signature-256`. */
+interface CheckRunEvent {
+  action: string;
+  check_run: {
+    name: string;
+    status: string;
+    conclusion: string | null;
+    head_sha: string;
+    details_url?: string;
+    output?: { title?: string; summary?: string };
+    pull_requests?: { number: number }[];
+  };
+  repository: { full_name: string };
+}
+
+interface Normalized {
+  repo: string;
+  prNumber: number;
+  previewUrl: string;
+  sha: string | null;
+}
+
+const PREVIEW_URL_RE = /https:\/\/[^\s)\]]+\.vercel\.app[^\s)\]]*/;
+
+/** Extract the first *.vercel.app URL from a string. */
+function extractPreviewUrl(text: string): string | undefined {
+  return text.match(PREVIEW_URL_RE)?.[0];
+}
+
 function verifyGithubSignature(
   rawBody: string,
   signatureHeader: string | null,
@@ -30,43 +59,101 @@ function verifyGithubSignature(
   return timingSafeEqual(a, b);
 }
 
-/** Post a chat.postMessage to a Slack channel using the workspace bot token. */
-async function postSlackMessage(args: {
+/** Map an inbound GitHub event into a normalized verify trigger, or null. */
+function normalize(event: string, payload: unknown): Normalized | null {
+  if (event === "deployment_status") {
+    const p = payload as DeploymentStatusEvent;
+    if (p.deployment_status.state !== "success") return null;
+    const url = p.deployment_status.environment_url;
+    if (!url || !url.includes(".vercel.app")) return null;
+    const prNumber = p.pull_requests?.[0]?.number;
+    if (!prNumber) return null;
+    return {
+      repo: p.repository.full_name,
+      prNumber,
+      previewUrl: url,
+      sha: p.deployment.sha,
+    };
+  }
+
+  if (event === "check_run") {
+    const p = payload as CheckRunEvent;
+    if (p.action !== "completed" || p.check_run.conclusion !== "success") {
+      return null;
+    }
+    const detailsUrl = p.check_run.details_url ?? "";
+    const summary = p.check_run.output?.summary ?? "";
+    const url = extractPreviewUrl(detailsUrl) ?? extractPreviewUrl(summary);
+    if (!url) return null;
+    const prNumber = p.check_run.pull_requests?.[0]?.number;
+    if (!prNumber) return null;
+    return {
+      repo: p.repository.full_name,
+      prNumber,
+      previewUrl: url,
+      sha: p.check_run.head_sha,
+    };
+  }
+
+  if (event === "issue_comment") {
+    const p = payload as IssueCommentEvent;
+    if (p.action !== "created") return null;
+    if (!p.issue.pull_request) return null;
+    const previewAuthor =
+      process.env.HIREVOICE_PREVIEW_COMMENT_AUTHOR ?? "vercel[bot]";
+    if (p.sender.login !== previewAuthor) return null;
+    const url = extractPreviewUrl(p.comment.body);
+    if (!url) return null;
+    return {
+      repo: p.repository.full_name,
+      prNumber: p.issue.number,
+      previewUrl: url,
+      sha: null,
+    };
+  }
+
+  return null;
+}
+
+async function postSlackThread(args: {
   token: string;
   channel: string;
+  threadTs: string;
   text: string;
 }): Promise<void> {
-  const response = await fetch("https://slack.com/api/chat.postMessage", {
+  const res = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       Authorization: `Bearer ${args.token}`,
     },
-    body: JSON.stringify({ channel: args.channel, text: args.text }),
+    body: JSON.stringify({
+      channel: args.channel,
+      thread_ts: args.threadTs,
+      text: args.text,
+    }),
   });
-  const payload = (await response.json()) as { ok: boolean; error?: string };
+  const payload = (await res.json()) as { ok: boolean; error?: string };
   if (!payload.ok) {
-    throw new Error(`slack chat.postMessage failed: ${payload.error}`);
+    throw new Error(`chat.postMessage failed: ${payload.error}`);
   }
 }
 
 /**
- * Handle `POST /api/webhooks/github`.
+ * POST /api/webhooks/github.
  *
- * Verifies the GitHub HMAC, ignores everything that is not an
- * `issue_comment.created` from the configured preview-bot author on a PR,
- * extracts the preview URL, and posts a Slack mention so Junior's normal
- * Slack ingress picks the request up and runs the `verify-preview` skill.
+ * Verifies the GitHub HMAC, normalizes (issue_comment | deployment_status |
+ * check_run) into a (repo, pr, preview_url, sha) tuple, looks up every active
+ * subscription for that PR in libsql, dedupes by `last_verified_url`, and posts
+ * a `<@junior> /verify-preview ...` mention into each subscribed Slack thread.
+ * Junior's existing Slack ingress runs the skill in-thread per subscription.
  */
 export async function handleGithubWebhook(c: Context): Promise<Response> {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
-  const channel = process.env.HIREVOICE_PR_CHANNEL_ID;
   const slackToken = process.env.SLACK_BOT_TOKEN;
   const juniorUserId = process.env.HIREVOICE_JUNIOR_SLACK_USER_ID;
-  const previewAuthor =
-    process.env.HIREVOICE_PREVIEW_COMMENT_AUTHOR ?? "vercel[bot]";
 
-  if (!secret || !channel || !slackToken || !juniorUserId) {
+  if (!secret || !slackToken || !juniorUserId) {
     return c.text("github ingress not configured", 503);
   }
 
@@ -76,24 +163,36 @@ export async function handleGithubWebhook(c: Context): Promise<Response> {
     return c.text("bad signature", 401);
   }
 
-  const noContent = () => new Response(null, { status: 204 });
-  const event = c.req.header("x-github-event");
+  const event = c.req.header("x-github-event") ?? "";
   if (event === "ping") return c.text("pong", 200);
-  if (event !== "issue_comment") return noContent();
 
-  const payload = JSON.parse(rawBody) as IssueCommentEvent;
-  if (payload.action !== "created") return noContent();
-  if (!payload.issue.pull_request) return noContent();
-  if (payload.sender.login !== previewAuthor) return noContent();
+  const noContent = () => new Response(null, { status: 204 });
 
-  const previewUrl = extractPreviewUrl(payload.comment.body);
-  if (!previewUrl) return noContent();
+  const trigger = normalize(event, JSON.parse(rawBody));
+  if (!trigger) return noContent();
 
-  const repo = payload.repository.full_name;
-  const pr = payload.issue.number;
-  const prUrl = payload.issue.html_url;
-  const text = `<@${juniorUserId}> /verify-preview pr=${repo}#${pr} url=${previewUrl}\n• PR: ${prUrl}\n• Preview: ${previewUrl}`;
+  const subs = await findActiveForPr(trigger.repo, trigger.prNumber);
+  if (subs.length === 0) return noContent();
 
-  await postSlackMessage({ token: slackToken, channel, text });
-  return c.text("dispatched", 202);
+  const targets = subs.filter((s) => s.lastVerifiedUrl !== trigger.previewUrl);
+  if (targets.length === 0) return noContent();
+
+  const shaTag = trigger.sha ? ` sha=${trigger.sha.slice(0, 7)}` : "";
+  const text =
+    `<@${juniorUserId}> /verify-preview ` +
+    `pr=${trigger.repo}#${trigger.prNumber} ` +
+    `url=${trigger.previewUrl}${shaTag} sub=<id-passed-per-target>`;
+
+  await Promise.all(
+    targets.map((sub) =>
+      postSlackThread({
+        token: slackToken,
+        channel: sub.slackChannelId,
+        threadTs: sub.slackThreadTs,
+        text: text.replace("<id-passed-per-target>", String(sub.id)),
+      }),
+    ),
+  );
+
+  return c.json({ dispatched: targets.length }, 202);
 }

@@ -3,11 +3,12 @@
 You operate inside the Hirevoice workspace. Things you can assume:
 
 - The primary product repo is `hirevoice/platform`. It is a pnpm + turbo monorepo with multiple apps under `apps/` (api, backoffice, chat, dashboard, interview, landing-position, workflow).
-- Pull requests to `hirevoice/platform` produce a Vercel preview deployment. The Vercel bot comments on the PR with the preview URL when the deployment is ready. That comment is the trigger for `verify-preview`.
-- Preview builds take 1–10 minutes. The Vercel bot edits its own comment as the build progresses; only the final "Preview: <url>" body indicates a live deployment.
+- Pull requests to `hirevoice/platform` produce a Vercel preview deployment. Preview builds take 1–10 minutes. When the deploy succeeds, GitHub fires one or more of `issue_comment` (Vercel bot), `deployment_status` (state=success with a `*.vercel.app` `environment_url`), or `check_run.completed`. Any of those is a valid trigger for `/verify-preview`.
+- People run you in **any public Slack channel**, not a dedicated one. A user mentions you in a thread to `/watch-preview` a PR — the subscription is bound to that exact `(channel, thread)`. When future preview events fire, you reply **in that same thread**. Multiple threads can watch the same PR; one channel can watch many PRs.
+- Subscriptions live in a Turso DB keyed by `(repo, pr_number, slack_channel_id, slack_thread_ts)`. The webhook handler dedupes by `last_verified_url` so a redeploy to the same preview URL does not re-trigger.
 - GitHub App credentials are configured for `hirevoice/platform`. Use the `github-code` skill for PR comments and the `github-issues` skill for issues.
 - The agent-browser snapshot is provisioned with Chromium and the GTK/X11 system libs from the agent-browser plugin manifest. Browser commands run inside the per-turn Vercel Sandbox.
-- Reply to the original Slack thread for status; post the deliverable (verification summary + recording link) as a PR comment on GitHub.
+- The canonical deliverable is the Slack thread reply (with attached recording). Posting a PR comment is secondary and only happens on a fully successful end-to-end run.
 
 What you do not have:
 
