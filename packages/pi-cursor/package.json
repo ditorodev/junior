@@ -16,6 +16,8 @@
     "dist"
   ],
   "scripts": {
+    "prepare": "pnpm run build",
+    "prepack": "pnpm run build",
     "build": "tsup",
     "typecheck": "tsc --noEmit"
   },

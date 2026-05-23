@@ -11,7 +11,7 @@
     "lint": "pnpm --filter @sentry/junior lint",
     "lint:fix": "pnpm --filter @sentry/junior lint:fix",
     "lint-staged": "lint-staged",
-    "build": "pnpm --filter @sentry/junior build",
+    "build": "pnpm --filter @sentry/pi-cursor build && pnpm --filter @sentry/junior build",
     "build:example": "pnpm --filter @sentry/junior-example build",
     "docs:dev": "pnpm --filter @sentry/junior-docs dev",
     "docs:build": "pnpm --filter @sentry/junior-docs build",
