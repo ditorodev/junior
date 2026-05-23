@@ -29,6 +29,7 @@ export default defineConfig({
     "@chat-adapter/state-redis",
     "@mariozechner/pi-agent-core",
     "@mariozechner/pi-ai",
+    "@sentry/pi-cursor",
     "@sinclair/typebox",
     "@slack/web-api",
     "@vercel/functions",

@@ -11,6 +11,7 @@ import {
   streamAnthropic,
   streamSimpleAnthropic,
 } from "@mariozechner/pi-ai/anthropic";
+import { registerCursorProvider, resolveCursorModel } from "@sentry/pi-cursor";
 
 // Directly register the anthropic provider at import time. pi-ai's built-in
 // registration relies on opaque dynamic import() calls that break under
@@ -21,6 +22,11 @@ registerApiProvider({
   stream: streamAnthropic,
   streamSimple: streamSimpleAnthropic,
 });
+
+// Register the cursor api provider unconditionally. The provider only
+// touches CURSOR_API_KEY when junior actually selects a `cursor/*` model,
+// so importing without credentials is safe.
+registerCursorProvider();
 import type { ZodTypeAny, z } from "zod";
 import {
   extractGenAiUsageAttributes,
@@ -135,16 +141,20 @@ function parseJsonCandidate(text: string): unknown {
 }
 
 /**
- * Look up a gateway model by id. Throws `Unknown AI Gateway model id: …` if
- * the id is not in pi-ai's registry — callers at the config boundary can use
- * this to fail fast at startup instead of mid-turn.
+ * Look up a model by id. Cursor model ids (`cursor/*`) resolve through the
+ * pi-cursor registry; everything else is looked up in pi-ai's vercel-ai
+ * gateway registry. Throws `Unknown AI model id: …` if neither registry
+ * knows the id — callers at the config boundary can use this to fail fast
+ * at startup instead of mid-turn.
  */
 export function resolveGatewayModel(modelId: string): Model<any> {
+  const cursor = resolveCursorModel(modelId);
+  if (cursor) return cursor as Model<any>;
   const matched = getModels(GATEWAY_PROVIDER).find(
     (model: Model<any>) => model.id === modelId,
   );
   if (!matched) {
-    throw new Error(`Unknown AI Gateway model id: ${modelId}`);
+    throw new Error(`Unknown AI model id: ${modelId}`);
   }
   return matched;
 }

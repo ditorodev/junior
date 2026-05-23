@@ -42,6 +42,7 @@
     "@mariozechner/pi-agent-core": "0.73.0",
     "@mariozechner/pi-ai": "0.73.0",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@sentry/pi-cursor": "workspace:*",
     "@sinclair/typebox": "^0.34.49",
     "@slack/web-api": "^7.15.2",
     "@vercel/functions": "^3.5.0",
