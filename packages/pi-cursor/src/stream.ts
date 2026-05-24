@@ -11,7 +11,6 @@ import {
   type StopReason,
   type TextContent,
   type ThinkingContent,
-  type UserMessage,
   type Usage,
   createAssistantMessageEventStream,
 } from "@mariozechner/pi-ai";
@@ -245,44 +244,73 @@ function handleCursorMessage(message: SDKMessage, sink: TurnSink): void {
 
 function buildCursorPrompt(context: Context): string {
   const parts: string[] = [];
+  parts.push(
+    "You are running inside Cursor SDK as a one-shot agent step. Use Cursor's native tools for any filesystem/shell/git work. Do not promise or call tools that aren't actually exposed to you in this run.",
+  );
   if (context.systemPrompt) {
-    parts.push(`# System\n${context.systemPrompt}`);
+    parts.push(`# System (from host)\n${context.systemPrompt}`);
   }
-  for (const message of context.messages) {
-    const rendered = renderMessage(message);
-    if (rendered) parts.push(rendered);
+  const summary = summarizePriorTurns(context.messages);
+  if (summary) {
+    parts.push(
+      `# Prior conversation (context only — do not re-execute)\n${summary}`,
+    );
+  }
+  const latestUser = renderLatestUser(context.messages);
+  if (latestUser) {
+    parts.push(`# Current request\n${latestUser}`);
   }
   return parts.join("\n\n");
 }
 
-function renderMessage(message: Message): string | undefined {
-  if (message.role === "user") return renderUser(message);
-  if (message.role === "assistant") return renderAssistant(message);
-  return renderToolResult(message);
-}
-
-function renderUser(message: UserMessage): string | undefined {
-  const text = extractText(message.content);
-  return text ? `# User\n${text}` : undefined;
-}
-
-function renderAssistant(message: AssistantMessage): string | undefined {
-  const texts: string[] = [];
-  for (const part of message.content) {
-    if (part.type === "text") texts.push(part.text);
+function renderLatestUser(messages: Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
+    const text = extractText(message.content);
+    if (text) return text;
   }
-  const text = texts.join("");
-  return text ? `# Assistant\n${text}` : undefined;
+  return undefined;
 }
 
-function renderToolResult(message: {
-  role: "toolResult";
-  toolName: string;
-  content: Array<TextContent | { type: "image" }>;
-}): string | undefined {
-  const text = extractText(message.content);
-  if (!text) return undefined;
-  return `# Tool Result (${message.toolName})\n${text}`;
+const MAX_SUMMARY_CHARS = 4_000;
+
+function summarizePriorTurns(messages: Message[]): string | undefined {
+  const latestUserIndex = lastUserIndex(messages);
+  if (latestUserIndex <= 0) return undefined;
+  const prior = messages.slice(0, latestUserIndex);
+  const lines: string[] = [];
+  for (const message of prior) {
+    const role = message.role;
+    if (role === "toolResult") continue;
+    const text = extractMessageText(message);
+    if (!text) continue;
+    const clipped =
+      text.length > 800 ? `${text.slice(0, 800)}\n[…truncated…]` : text;
+    lines.push(`- ${role}: ${clipped}`);
+  }
+  if (lines.length === 0) return undefined;
+  const joined = lines.join("\n");
+  if (joined.length <= MAX_SUMMARY_CHARS) return joined;
+  return `${joined.slice(0, MAX_SUMMARY_CHARS)}\n[…earlier turns truncated…]`;
+}
+
+function lastUserIndex(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") return i;
+  }
+  return -1;
+}
+
+function extractMessageText(message: Message): string {
+  if (message.role === "assistant") {
+    const texts: string[] = [];
+    for (const part of message.content) {
+      if (part.type === "text") texts.push(part.text);
+    }
+    return texts.join("");
+  }
+  return extractText(message.content);
 }
 
 function extractText(
