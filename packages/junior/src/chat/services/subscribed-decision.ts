@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { escapeXml } from "@/chat/xml";
 
 export enum SubscribedReplyReason {
   ThreadOptOut = "thread_opt_out",
@@ -11,6 +10,7 @@ export enum SubscribedReplyReason {
   SideConversation = "side_conversation",
   LowConfidence = "low_confidence",
   ClassifierError = "classifier_error",
+  SubscribedDefault = "subscribed_default",
 }
 
 export interface SubscribedDecisionInput {
@@ -34,13 +34,6 @@ export interface SubscribedDecisionResult {
   reasonDetail?: string;
 }
 
-interface ClassifierResult {
-  should_reply: boolean;
-  should_unsubscribe?: boolean;
-  confidence: number;
-  reason?: string;
-}
-
 interface TranscriptMessage {
   author: string;
   role: "assistant" | "system" | "user";
@@ -59,24 +52,12 @@ interface RouterSignals {
 }
 
 const replyDecisionSchema = z.object({
-  should_reply: z
-    .boolean()
-    .describe("Whether Junior should respond to this thread message."),
-  should_unsubscribe: z
-    .boolean()
-    .optional()
-    .describe(
-      "Whether Junior should unsubscribe from this thread because the user clearly asked it to stop participating.",
-    ),
-  confidence: z
-    .number()
-    .min(0)
-    .max(1)
-    .describe("Classifier confidence from 0 to 1."),
-  reason: z.string().optional().describe("Short reason for the decision."),
+  should_reply: z.boolean(),
+  should_unsubscribe: z.boolean().optional(),
+  confidence: z.number().min(0).max(1),
+  reason: z.string().optional(),
 });
 
-const ROUTER_CONFIDENCE_THRESHOLD = 0.8;
 const LEADING_SLACK_MENTION_RE = /^\s*<@([A-Z0-9]+)(?:\|([^>]+))?>[\s,:-]*/i;
 const LEADING_NAMED_MENTION_RE = /^\s*@([a-z0-9._-]+)\b[\s,:-]*/i;
 const TRANSCRIPT_MESSAGE_LINE_RE =
@@ -253,69 +234,6 @@ function buildRouterSignals(input: SubscribedDecisionInput): RouterSignals {
   };
 }
 
-function buildRouterPrompt(rawText: string, signals: RouterSignals): string {
-  const recentThread =
-    signals.recentMessages.length > 0
-      ? signals.recentMessages
-          .map((message) =>
-            escapeXml(`[${message.role}] ${message.author}: ${message.text}`),
-          )
-          .join("\n")
-      : "[none]";
-
-  return [
-    `<latest-message>${escapeXml(rawText.trim() || "[attachment-only message]")}</latest-message>`,
-    "<routing-signals>",
-    `assistant_was_last_speaker=${signals.assistantWasLastSpeaker ? "true" : "false"}`,
-    `human_messages_since_last_assistant=${
-      signals.humanMessagesSinceLastAssistant ?? "none"
-    }`,
-    `latest_prior_message_role=${escapeXml(signals.latestPriorMessageRole)}`,
-    `current_message_has_directed_follow_up_cue=${
-      signals.currentMessageHasDirectedFollowUpCue ? "true" : "false"
-    }`,
-    `current_message_is_terse_clarification=${
-      signals.currentMessageIsTerseClarification ? "true" : "false"
-    }`,
-    `current_message_has_attachments=${
-      signals.currentMessageHasAttachments ? "true" : "false"
-    }`,
-    "</routing-signals>",
-    `<latest-prior-assistant-message>${escapeXml(
-      signals.latestPriorAssistantMessage,
-    )}</latest-prior-assistant-message>`,
-    "<recent-thread>",
-    recentThread,
-    "</recent-thread>",
-  ].join("\n");
-}
-
-function getReplyConfidenceThreshold(signals: RouterSignals): number {
-  let threshold = ROUTER_CONFIDENCE_THRESHOLD;
-
-  if (
-    signals.assistantWasLastSpeaker &&
-    signals.humanMessagesSinceLastAssistant === 0
-  ) {
-    if (
-      signals.currentMessageHasDirectedFollowUpCue ||
-      signals.currentMessageIsTerseClarification
-    ) {
-      threshold = 0.65;
-    } else {
-      threshold = 0.9;
-    }
-  } else if (signals.humanMessagesSinceLastAssistant === 1) {
-    threshold = signals.currentMessageHasDirectedFollowUpCue ? 0.8 : 0.9;
-  } else if (signals.humanMessagesSinceLastAssistant === undefined) {
-    threshold = 0.85;
-  } else if (signals.humanMessagesSinceLastAssistant >= 2) {
-    threshold = 0.9;
-  }
-
-  return Math.max(0.6, Math.min(0.9, threshold));
-}
-
 /** Fast heuristic check before the LLM classifier — skips messages directed at another party. */
 export function getSubscribedReplyPreflightDecision(args: {
   botUserName: string;
@@ -346,31 +264,19 @@ export function getSubscribedReplyPreflightDecision(args: {
   };
 }
 
-function buildRouterSystemPrompt(botUserName: string): string {
-  return [
-    "You are a message router for a Slack assistant named Junior in a subscribed Slack thread.",
-    "Decide whether Junior should reply to the latest message.",
-    "Subscribed threads are passive by default.",
-    "Reply true only when the latest message is aimed at Junior.",
-    "Use who currently has the conversation floor, not just topic overlap.",
-    "If Junior was the last speaker, only a clear turn back to Junior should count as an implicit follow-up.",
-    "Terse clarifications like 'which one?' or 'why?' right after Junior answers can be should_reply=true.",
-    "Direct self-reference to Junior's prior answer like 'what did you just say?' or 'explain that more' can be should_reply=true.",
-    "If one or more humans spoke after Junior, require a clear turn back to Junior. Shared domain vocabulary alone is not enough.",
-    "Questions like 'what about auth?' or 'can you check on this?' are usually human-to-human unless the thread clearly turns back to Junior.",
-    "A vague question like 'is that the right approach?' is still should_reply=false unless it clearly turns back to Junior.",
-    "Acknowledgments, reactions, status chatter, and team coordination should be should_reply=false.",
-    "If the latest message clearly tells Junior to stop watching, replying, or participating, set should_unsubscribe=true and should_reply=false.",
-    "When uncertain, prefer should_reply=false with low confidence.",
-    "",
-    "Return JSON with should_reply, should_unsubscribe, confidence, and a short reason.",
-    "Do not return any extra keys.",
-    "",
-    `<assistant-name>${escapeXml(botUserName)}</assistant-name>`,
-  ].join("\n");
-}
-
-/** Decide whether to reply to a message in a subscribed thread using an LLM classifier. */
+/**
+ * Decide whether to reply to a message in a subscribed Slack thread.
+ *
+ * The current policy is "let it happen": once a thread is subscribed
+ * (because junior already engaged), reply to any non-trivial message.
+ * Preflight checks still short-circuit obvious non-replies — empty
+ * messages, acknowledgments, addressed-to-other-party leads, explicit
+ * stop instructions, and generic immediate side-conversation questions.
+ *
+ * The `modelId` / `completeObject` / `logClassifierFailure` deps are
+ * retained on the signature so callers (and tests) don't need to
+ * change; the LLM classifier path is no longer exercised.
+ */
 export async function decideSubscribedThreadReply(args: {
   botUserName: string;
   modelId: string;
@@ -447,6 +353,15 @@ export async function decideSubscribedThreadReply(args: {
     };
   }
 
+  if (isThreadOptOutInstruction(rawText, text)) {
+    return {
+      shouldReply: false,
+      shouldUnsubscribe: true,
+      reason: SubscribedReplyReason.ThreadOptOut,
+      reasonDetail: "explicit stop instruction",
+    };
+  }
+
   if (
     signals.assistantWasLastSpeaker &&
     signals.humanMessagesSinceLastAssistant === 0 &&
@@ -462,69 +377,18 @@ export async function decideSubscribedThreadReply(args: {
     };
   }
 
-  try {
-    const result = await args.completeObject({
-      modelId: args.modelId,
-      schema: replyDecisionSchema,
-      maxTokens: 120,
-      temperature: 0,
-      system: buildRouterSystemPrompt(args.botUserName),
-      prompt: buildRouterPrompt(rawText, signals),
-      metadata: {
-        modelId: args.modelId,
-        threadId: args.input.context.threadId ?? "",
-        channelId: args.input.context.channelId ?? "",
-        requesterId: args.input.context.requesterId ?? "",
-        runId: args.input.context.runId ?? "",
-      },
-    });
-
-    const parsed = replyDecisionSchema.parse(result.object) as ClassifierResult;
-    const reason = parsed.reason?.trim() || "classifier";
-    const replyConfidenceThreshold = getReplyConfidenceThreshold(signals);
-    if (parsed.should_unsubscribe) {
-      if (parsed.confidence < ROUTER_CONFIDENCE_THRESHOLD) {
-        return {
-          shouldReply: false,
-          reason: SubscribedReplyReason.LowConfidence,
-          reasonDetail: `${parsed.confidence.toFixed(2)}: ${reason}`,
-        };
-      }
-
-      return {
-        shouldReply: false,
-        shouldUnsubscribe: true,
-        reason: SubscribedReplyReason.ThreadOptOut,
-        reasonDetail: reason,
-      };
-    }
-
-    if (!parsed.should_reply) {
-      return {
-        shouldReply: false,
-        reason: SubscribedReplyReason.SideConversation,
-        reasonDetail: reason,
-      };
-    }
-
-    if (parsed.confidence < replyConfidenceThreshold) {
-      return {
-        shouldReply: false,
-        reason: SubscribedReplyReason.LowConfidence,
-        reasonDetail: `${parsed.confidence.toFixed(2)}: ${reason}`,
-      };
-    }
-
-    return {
-      shouldReply: true,
-      reason: SubscribedReplyReason.Classifier,
-      reasonDetail: reason,
-    };
-  } catch (error) {
-    args.logClassifierFailure(error, args.input);
-    return {
-      shouldReply: false,
-      reason: SubscribedReplyReason.ClassifierError,
-    };
-  }
+  // Default: subscribed threads always reply once junior has engaged.
+  // The classifier path used to gate this through an LLM call, but in
+  // practice that silenced junior whenever the routing model itself
+  // failed (e.g. cursor cold-start hiccups) and was already overly
+  // conservative. Explicit opt-out, acknowledgments, and the
+  // directed-to-other-party preflight already handle the cases that
+  // shouldn't trigger a reply.
+  void args.modelId;
+  void args.completeObject;
+  void args.logClassifierFailure;
+  return {
+    shouldReply: true,
+    reason: SubscribedReplyReason.SubscribedDefault,
+  };
 }

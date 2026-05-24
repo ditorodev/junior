@@ -41,7 +41,7 @@ function toPostedText(value: unknown): string {
 }
 
 describe("Slack behavior: subscribed messages", () => {
-  it("skips reply when classifier says not to reply", async () => {
+  it("skips reply when the message is a bare acknowledgment", async () => {
     const classifierCalls: string[] = [];
 
     const { slackRuntime } = createTestChatRuntime({
@@ -53,16 +53,16 @@ describe("Slack behavior: subscribed messages", () => {
               object: {
                 should_reply: false,
                 confidence: 0,
-                reason: "side conversation",
+                reason: "should not be called",
               },
-              text: '{"should_reply":false,"confidence":0,"reason":"side conversation"}',
+              text: '{"should_reply":false,"confidence":0,"reason":"should not be called"}',
             } as never;
           },
         },
         replyExecutor: {
           generateAssistantReply: async () => {
             throw new Error(
-              "generateAssistantReply should not run when classifier skips reply",
+              "generateAssistantReply should not run for acknowledgments",
             );
           },
         },
@@ -72,7 +72,7 @@ describe("Slack behavior: subscribed messages", () => {
     const thread = createTestThread({ id: "slack:C_BEHAVIOR:1700002000.000" });
     const message = createTestMessage({
       id: "m-subscribed-skip",
-      text: "sounds good thanks everyone",
+      text: "thanks!",
       isMention: false,
       threadId: thread.id,
       author: { userId: "U_TESTER" },
@@ -80,11 +80,11 @@ describe("Slack behavior: subscribed messages", () => {
 
     await slackRuntime.handleSubscribedMessage(thread, message);
 
-    expect(classifierCalls).toHaveLength(1);
+    expect(classifierCalls).toHaveLength(0);
     expect(thread.posts).toHaveLength(0);
   });
 
-  it("replies when classifier approves a subscribed-thread message", async () => {
+  it("replies to any non-trivial subscribed-thread message by default", async () => {
     const classifierCalls: string[] = [];
     const replyCalls: string[] = [];
 
@@ -95,11 +95,11 @@ describe("Slack behavior: subscribed messages", () => {
             classifierCalls.push(String(params.prompt));
             return {
               object: {
-                should_reply: true,
-                confidence: 1,
-                reason: "explicit ask",
+                should_reply: false,
+                confidence: 0,
+                reason: "should not be called",
               },
-              text: '{"should_reply":true,"confidence":1,"reason":"explicit ask"}',
+              text: '{"should_reply":false,"confidence":0,"reason":"should not be called"}',
             } as never;
           },
         },
@@ -134,7 +134,7 @@ describe("Slack behavior: subscribed messages", () => {
 
     await slackRuntime.handleSubscribedMessage(thread, message);
 
-    expect(classifierCalls).toHaveLength(1);
+    expect(classifierCalls).toHaveLength(0);
     expect(replyCalls).toHaveLength(1);
     expect(thread.posts).toHaveLength(1);
     expect(toPostedText(thread.posts[0])).toContain("monitor dashboards");
@@ -341,30 +341,23 @@ describe("Slack behavior: subscribed messages", () => {
     expect(thread.posts).toHaveLength(0);
   });
 
-  it("routes acknowledgment text with attachments through the classifier", async () => {
+  it("replies to acknowledgment text when an attachment is included", async () => {
     let classifierCalled = false;
-    let replyCalled = false;
+    const replyCalls: string[] = [];
 
     const { slackRuntime } = createRuntime({
       services: {
         subscribedReplyPolicy: {
           completeObject: async () => {
             classifierCalled = true;
-            return {
-              object: {
-                should_reply: false,
-                confidence: 0.95,
-                reason: "attachment acknowledgment",
-              },
-              text: '{"should_reply":false,"confidence":0.95,"reason":"attachment acknowledgment"}',
-            } as never;
+            throw new Error("classifier should be bypassed");
           },
         },
         replyExecutor: {
-          generateAssistantReply: async () => {
-            replyCalled = true;
+          generateAssistantReply: async (prompt) => {
+            replyCalls.push(prompt);
             return {
-              text: "This should never be posted.",
+              text: "Looking at the attachment.",
               diagnostics: {
                 assistantMessageCount: 1,
                 modelId: "fake-agent-model",
@@ -397,35 +390,28 @@ describe("Slack behavior: subscribed messages", () => {
 
     await slackRuntime.handleSubscribedMessage(thread, message);
 
-    expect(classifierCalled).toBe(true);
-    expect(replyCalled).toBe(false);
-    expect(thread.posts).toHaveLength(0);
+    expect(classifierCalled).toBe(false);
+    expect(replyCalls).toHaveLength(1);
+    expect(thread.posts).toHaveLength(1);
   });
 
-  it("routes attachment-only passive messages through the classifier", async () => {
+  it("replies to attachment-only passive messages by default", async () => {
     let classifierCalled = false;
-    let replyCalled = false;
+    const replyCalls: string[] = [];
 
     const { slackRuntime } = createRuntime({
       services: {
         subscribedReplyPolicy: {
           completeObject: async () => {
             classifierCalled = true;
-            return {
-              object: {
-                should_reply: false,
-                confidence: 0.95,
-                reason: "passive attachment",
-              },
-              text: '{"should_reply":false,"confidence":0.95,"reason":"passive attachment"}',
-            } as never;
+            throw new Error("classifier should be bypassed");
           },
         },
         replyExecutor: {
-          generateAssistantReply: async () => {
-            replyCalled = true;
+          generateAssistantReply: async (prompt) => {
+            replyCalls.push(prompt);
             return {
-              text: "This should never be posted.",
+              text: "Got the screenshot.",
               diagnostics: {
                 assistantMessageCount: 1,
                 modelId: "fake-agent-model",
@@ -458,37 +444,28 @@ describe("Slack behavior: subscribed messages", () => {
 
     await slackRuntime.handleSubscribedMessage(thread, message);
 
-    expect(classifierCalled).toBe(true);
-    expect(replyCalled).toBe(false);
-    expect(thread.posts).toHaveLength(0);
+    expect(classifierCalled).toBe(false);
+    expect(replyCalls).toHaveLength(1);
+    expect(thread.posts).toHaveLength(1);
   });
 
-  it("routes legacy attachment-only passive messages through the classifier", async () => {
+  it("replies to legacy attachment-only passive messages by default", async () => {
     let classifierCalled = false;
-    let replyCalled = false;
+    const replyCalls: string[] = [];
 
     const { slackRuntime } = createRuntime({
       services: {
         subscribedReplyPolicy: {
-          completeObject: async (args) => {
+          completeObject: async () => {
             classifierCalled = true;
-            expect(args.prompt).toContain("Deploy failed");
-            expect(args.prompt).toContain("Service: checkout");
-            return {
-              object: {
-                should_reply: false,
-                confidence: 0.95,
-                reason: "passive legacy attachment",
-              },
-              text: '{"should_reply":false,"confidence":0.95,"reason":"passive legacy attachment"}',
-            } as never;
+            throw new Error("classifier should be bypassed");
           },
         },
         replyExecutor: {
-          generateAssistantReply: async () => {
-            replyCalled = true;
+          generateAssistantReply: async (prompt) => {
+            replyCalls.push(prompt);
             return {
-              text: "This should never be posted.",
+              text: "Acknowledged the deploy failure.",
               diagnostics: {
                 assistantMessageCount: 1,
                 modelId: "fake-agent-model",
@@ -526,9 +503,9 @@ describe("Slack behavior: subscribed messages", () => {
 
     await slackRuntime.handleSubscribedMessage(thread, message);
 
-    expect(classifierCalled).toBe(true);
-    expect(replyCalled).toBe(false);
-    expect(thread.posts).toHaveLength(0);
+    expect(classifierCalled).toBe(false);
+    expect(replyCalls).toHaveLength(1);
+    expect(thread.posts).toHaveLength(1);
   });
 
   it("short-circuits generic immediate side-conversation questions without calling the classifier", async () => {
@@ -594,30 +571,23 @@ describe("Slack behavior: subscribed messages", () => {
     expect(thread.posts).toHaveLength(1);
   });
 
-  it("routes generic immediate attachment follow-ups through the classifier", async () => {
+  it("replies to attachment follow-ups in a subscribed thread by default", async () => {
     let classifierCalled = false;
-    let replyCalled = false;
+    const replyCalls: string[] = [];
 
     const { slackRuntime } = createRuntime({
       services: {
         subscribedReplyPolicy: {
           completeObject: async () => {
             classifierCalled = true;
-            return {
-              object: {
-                should_reply: false,
-                confidence: 0.95,
-                reason: "attachment follow-up",
-              },
-              text: '{"should_reply":false,"confidence":0.95,"reason":"attachment follow-up"}',
-            } as never;
+            throw new Error("classifier should be bypassed");
           },
         },
         replyExecutor: {
-          generateAssistantReply: async () => {
-            replyCalled = true;
+          generateAssistantReply: async (prompt) => {
+            replyCalls.push(prompt);
             return {
-              text: "This should never be posted.",
+              text: "On it.",
               diagnostics: {
                 assistantMessageCount: 1,
                 modelId: "fake-agent-model",
@@ -644,7 +614,6 @@ describe("Slack behavior: subscribed messages", () => {
         author: { userId: "U_TESTER" },
       }),
     );
-    replyCalled = false;
 
     await slackRuntime.handleSubscribedMessage(
       thread,
@@ -663,9 +632,9 @@ describe("Slack behavior: subscribed messages", () => {
       }),
     );
 
-    expect(classifierCalled).toBe(true);
-    expect(replyCalled).toBe(false);
-    expect(thread.posts).toHaveLength(1);
+    expect(classifierCalled).toBe(false);
+    expect(replyCalls).toHaveLength(2);
+    expect(thread.posts).toHaveLength(2);
   });
 
   it("stays silent when a subscribed message is clearly directed at another bot", async () => {
